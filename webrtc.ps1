@@ -69,6 +69,13 @@ if (-not $adapter) {
 }
 $ifIndex = $adapter.ifIndex
 
+# --- Отключаем IPv6 на всех адаптерах (утечка WebRTC через IPv6) ---
+Write-Host "Отключаю IPv6..." -ForegroundColor Cyan
+Get-NetAdapterBinding -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue |
+    Disable-NetAdapterBinding -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
+Write-Host "  IPv6 отключён на всех адаптерах." -ForegroundColor Green
+
+
 # ============================================================
 # --- СБРОС В DHCP (восстанавливаем интернет после прошлого запуска) ---
 # ============================================================
