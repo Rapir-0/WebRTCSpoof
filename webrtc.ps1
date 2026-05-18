@@ -219,6 +219,26 @@ Write-Host "`nИтоговая конфигурация адаптера:" -Fore
 ipconfig | Select-String -Pattern "Ethernet|IPv4|Subnet|Gateway|DNS" -Context 0,0
 
 # ============================================================
+# --- Политика Chrome: блокировка non-proxied UDP (закрытие STUN-утечки) ---
+# ============================================================
+Write-Host "`nСтавлю политику Chrome (блокировка UDP-утечки WebRTC)..." -ForegroundColor Cyan
+
+try {
+    $regPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path $regPath -Name "WebRtcIPHandling" -Value "disable_non_proxied_udp" -Type String -Force
+    Write-Host "  Политика WebRtcIPHandling = disable_non_proxied_udp выставлена." -ForegroundColor Green
+} catch {
+    Write-Host "  Не удалось применить политику: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+
+
+
+
+# ============================================================
 # --- Chrome: ставим флаг Anonymize local IPs = Disabled ---
 # ============================================================
 Write-Host "`nНастраиваю Chrome (флаг WebRTC mDNS = Disabled)..." -ForegroundColor Cyan
