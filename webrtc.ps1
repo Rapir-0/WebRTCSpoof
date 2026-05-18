@@ -1,19 +1,16 @@
-# spoof-ip.ps1
+# webrtc.ps1 — WebRTC IP Spoofer by cle0man
+# https://t.me/cle0man
 # Запускать от администратора
 
 param(
     [string]$AdapterName = "Ethernet"
-    
 )
 
-# Принудительно ставим UTF-8 для консоли
-$OutputEncoding = [System.Text.UTF8Encoding]::new()
+# --- Принудительно ставим UTF-8 для консоли ---
+$OutputEncoding           = [System.Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 [Console]::InputEncoding  = [System.Text.UTF8Encoding]::new()
-chcp 65001 | Out-Null
-
-
-
+try { chcp 65001 | Out-Null } catch {}
 
 # --- Баннер ---
 Write-Host ""
@@ -72,7 +69,56 @@ if (-not $adapter) {
 }
 $ifIndex = $adapter.ifIndex
 
-# --- Читаем текущие настройки (Gateway и DNS из DHCP) ---
+# ============================================================
+# --- СБРОС В DHCP (восстанавливаем интернет после прошлого запуска) ---
+# ============================================================
+Write-Host "Сбрасываю адаптер в исходное состояние (DHCP)..." -ForegroundColor Cyan
+
+# 1) Удаляем все статические IPv4 адреса
+Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.PrefixOrigin -eq 'Manual' } |
+    Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+
+# 2) Удаляем дефолтные маршруты (могли остаться от прошлой подмены)
+Get-NetRoute -InterfaceIndex $ifIndex -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue |
+    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+
+# 3) Включаем DHCP для IP и сбрасываем DNS
+netsh interface ipv4 set address name="$AdapterName" source=dhcp 2>&1 | Out-Null
+netsh interface ipv4 set dnsservers name="$AdapterName" source=dhcp 2>&1 | Out-Null
+
+# 4) Обновляем аренду
+ipconfig /release "$AdapterName" 2>&1 | Out-Null
+Start-Sleep -Milliseconds 500
+ipconfig /renew "$AdapterName" 2>&1 | Out-Null
+
+Write-Host "  Жду восстановления интернета..." -ForegroundColor Gray
+
+# 5) Ждём пока появится валидный шлюз и интернет (до 20 секунд)
+$gotInternet = $false
+for ($i = 1; $i -le 20; $i++) {
+    Start-Sleep -Seconds 1
+    $cfg = Get-NetIPConfiguration -InterfaceIndex $ifIndex -ErrorAction SilentlyContinue
+    $gw  = ($cfg.IPv4DefaultGateway | Select-Object -First 1).NextHop
+    if ($gw) {
+        $ping = Test-Connection -ComputerName 1.1.1.1 -Count 1 -Quiet -ErrorAction SilentlyContinue
+        if ($ping) {
+            Write-Host "  Интернет восстановлен (Gateway: $gw, попытка $i)" -ForegroundColor Green
+            $gotInternet = $true
+            break
+        }
+    }
+    Write-Host "  Попытка $i/20..." -ForegroundColor DarkGray
+}
+
+if (-not $gotInternet) {
+    Write-Host "Не удалось восстановить интернет за 20 секунд." -ForegroundColor Red
+    Write-Host "Проверьте подключение и попробуйте ещё раз." -ForegroundColor Yellow
+    Read-Host "Нажмите Enter для выхода"
+    exit 1
+}
+
+# --- Читаем текущие настройки (теперь точно от DHCP) ---
 Write-Host "Читаю текущие настройки адаптера..." -ForegroundColor Cyan
 
 $config = Get-NetIPConfiguration -InterfaceIndex $ifIndex
@@ -128,21 +174,9 @@ if (-not $publicIP) {
     exit 1
 }
 
-# --- Чистим старые статические IP и маршруты ---
-Write-Host "Очищаю старые настройки адаптера..." -ForegroundColor Cyan
-
-# Снимаем DHCP
+# --- Переключаем в Manual режим перед назначением статики ---
 Set-NetIPInterface -InterfaceIndex $ifIndex -Dhcp Disabled -ErrorAction SilentlyContinue
-
-# Удаляем все IPv4 адреса
-Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-
-# Удаляем дефолтные маршруты
-Get-NetRoute -InterfaceIndex $ifIndex -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue |
-    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
-
-Start-Sleep -Milliseconds 800
+Start-Sleep -Milliseconds 300
 
 # --- Применяем настройки через netsh (он игнорирует subnet-проверку) ---
 Write-Host "Применяю новые настройки:" -ForegroundColor Cyan
@@ -153,7 +187,7 @@ Write-Host "  DNS:     $($currentDNS -join ', ')" -ForegroundColor White
 # Прописываем IP + маску + шлюз через netsh
 $netshOutput = netsh interface ipv4 set address name="$AdapterName" static $publicIP 255.0.0.0 $currentGateway 2>&1
 
-if ($LASTEXITCODE -ne 0 -or $netshOutput -match "error|ошибка|fail") {
+if ($LASTEXITCODE -ne 0 -or $netshOutput -match "(?i)(error|fail|denied|invalid)") {
     Write-Host "netsh вернул проблему:" -ForegroundColor Yellow
     Write-Host $netshOutput
 }
