@@ -219,19 +219,55 @@ Write-Host "`nИтоговая конфигурация адаптера:" -Fore
 ipconfig | Select-String -Pattern "Ethernet|IPv4|Subnet|Gateway|DNS" -Context 0,0
 
 # ============================================================
-# --- Политика Chrome: блокировка non-proxied UDP (закрытие STUN-утечки) ---
+# --- Firewall: блокируем UDP для Chrome (повторяет Proxifier "Block UDP") ---
 # ============================================================
-Write-Host "`nСтавлю политику Chrome (блокировка UDP-утечки WebRTC)..." -ForegroundColor Cyan
+Write-Host "`nНастраиваю Firewall (блокировка UDP-утечек WebRTC через Chrome)..." -ForegroundColor Cyan
 
+# Удаляем старую политику реестра, если осталась от прошлого запуска
 try {
-    $regPath = "HKLM:\SOFTWARE\Policies\Google\Chrome"
-    if (-not (Test-Path $regPath)) {
-        New-Item -Path $regPath -Force | Out-Null
+    Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Google\Chrome" `
+                        -Name "WebRtcIPHandling" `
+                        -ErrorAction SilentlyContinue
+} catch {}
+
+# Ищем chrome.exe
+$chromePathForFW = $null
+$chromeCandidates = @(
+    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+)
+$chromePathForFW = $chromeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if (-not $chromePathForFW) {
+    Write-Host "  chrome.exe не найден, пропускаю настройку Firewall." -ForegroundColor Yellow
+} else {
+    try {
+        # Удаляем старые правила
+        Remove-NetFirewallRule -DisplayName "WebRTCSpoof - Chrome Block UDP" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "WebRTCSpoof - Chrome Allow DNS UDP" -ErrorAction SilentlyContinue
+
+        # Разрешаем DNS на UDP 53
+        New-NetFirewallRule -DisplayName "WebRTCSpoof - Chrome Allow DNS UDP" `
+                            -Direction Outbound `
+                            -Program $chromePathForFW `
+                            -Protocol UDP `
+                            -RemotePort 53 `
+                            -Action Allow `
+                            -Profile Any | Out-Null
+
+        # Блокируем остальной UDP для Chrome
+        New-NetFirewallRule -DisplayName "WebRTCSpoof - Chrome Block UDP" `
+                            -Direction Outbound `
+                            -Program $chromePathForFW `
+                            -Protocol UDP `
+                            -Action Block `
+                            -Profile Any | Out-Null
+
+        Write-Host "  Правила Firewall созданы: Chrome UDP заблокирован (кроме DNS)." -ForegroundColor Green
+    } catch {
+        Write-Host "  Ошибка создания правил Firewall: $($_.Exception.Message)" -ForegroundColor Red
     }
-    Set-ItemProperty -Path $regPath -Name "WebRtcIPHandling" -Value "disable_non_proxied_udp" -Type String -Force
-    Write-Host "  Политика WebRtcIPHandling = disable_non_proxied_udp выставлена." -ForegroundColor Green
-} catch {
-    Write-Host "  Не удалось применить политику: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 
