@@ -6,6 +6,15 @@ param(
     
 )
 
+# Принудительно ставим UTF-8 для консоли
+$OutputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::InputEncoding  = [System.Text.UTF8Encoding]::new()
+chcp 65001 | Out-Null
+
+
+
+
 # --- Баннер ---
 Write-Host ""
 Write-Host "  ┌─────────────────────────────────────────────┐" -ForegroundColor DarkCyan
